@@ -39,7 +39,7 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(
 )
 
 client = gspread.authorize(creds)
-sheet = client.open("1eIqocM3ru54ilpJooE-9QgZCwspYMnb6cCo6d1QPt9g/edit?gid=0#gid=0").worksheet("Clean_Data")
+sheet = client.open("Clean_Data").sheet2
 
 
 # =====================================================
