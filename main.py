@@ -102,8 +102,9 @@ async def telegram_webhook(request: Request):
                 records = sheet.get_all_records()
                 
                 # Debug: Check what columns we have
-                if records:
-                    send_message(chat_id, f"🔍 Debug: Found {len(records)} total records")
+                print("DEBUG KEYS:", records[0].keys())
+                send_message(chat_id, f"🔎 Debug keys: {list(records[0].keys())}")
+
                     
                 customer_rows = []
 
