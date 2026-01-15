@@ -61,12 +61,10 @@ async def telegram_webhook(request: Request):
         if user_id != AUTHORIZED_USER_ID:
             return {"status": "ignored"}
 
-        text_lower = text.lower()
-
         # =================================================
         # HELP COMMAND
         # =================================================
-        if text_lower in ["help", "/help", "/start"]:
+        if text.lower() in ["help", "/help", "/start", "commands"]:
             help_text = (
                 "💰 *Finance Bot Commands*\n\n"
                 "📥 *Save Data:*\n"
@@ -87,6 +85,8 @@ async def telegram_webhook(request: Request):
             send_message(chat_id, help_text)
             return {"status": "ok"}
 
+        text_lower = text.lower()
+
         # =================================================
         # SHOW COMMAND
         # =================================================
@@ -98,11 +98,18 @@ async def telegram_webhook(request: Request):
                 return {"status": "ok"}
             
             try:
+                # Get all records from sheet
                 records = sheet.get_all_records()
+                
+                # Debug: Check what columns we have
+                if records:
+                    send_message(chat_id, f"🔍 Debug: Found {len(records)} total records")
+                    
                 customer_rows = []
 
                 for r in records:
-                    sheet_id = str(r.get("Customer_id", "")).strip()
+                    # Try different possible column names
+                    sheet_id = str(r.get("Customer_id", r.get("Customer ID", r.get("customer_id", "")))).strip()
                     if sheet_id == customer_id:
                         customer_rows.append(r)
 
@@ -110,7 +117,9 @@ async def telegram_webhook(request: Request):
                     send_message(chat_id, f"❌ No records found for customer {customer_id}")
                     return {"status": "ok"}
 
-                # First entry is the initial loan
+                # First entry is the initial loan (oldest entry)
+                customer_rows.sort(key=lambda x: x.get("Entry_time", x.get("Timestamp", "")))
+                
                 total_given = int(customer_rows[0].get("Amount", 0))
                 
                 # Subsequent entries are payments
@@ -119,7 +128,8 @@ async def telegram_webhook(request: Request):
                 balance = total_given - total_paid
 
                 reply = (
-                    f"📄 *Customer ID:* {customer_id}\n\n"
+                    f"📄 *Customer ID:* {customer_id}\n"
+                    f"📊 *Records Found:* {len(customer_rows)}\n\n"
                     f"💰 *Total Given:* ₹{total_given:,}\n"
                     f"💵 *Total Paid:* ₹{total_paid:,}\n"
                     f"📉 *Balance:* ₹{balance:,}\n\n"
@@ -137,7 +147,9 @@ async def telegram_webhook(request: Request):
                 send_message(chat_id, reply)
                 
             except Exception as e:
-                send_message(chat_id, f"❌ Error retrieving records: {str(e)}")
+                error_msg = f"❌ Error retrieving records: {str(e)}\n\n"
+                error_msg += f"🔍 Try checking: https://your-app.onrender.com/sheet-status"
+                send_message(chat_id, error_msg)
                 
             return {"status": "ok"}
 
@@ -233,55 +245,90 @@ async def telegram_webhook(request: Request):
             return {"status": "ok"}
 
         # =================================================
-        # SAVE DATA
+        # SAVE DATA - MAIN LOGIC
         # =================================================
         parts = text.split()
-
-        if len(parts) == 3:
-            customer_id, amount, date = parts
-        elif len(parts) == 2:
-            customer_id, amount = parts
-            date = datetime.now().strftime("%d-%m-%Y")
-        else:
+        
+        # If it's just numbers without spaces (like "130", "2100"), it's invalid
+        if len(parts) == 1 and text.replace(" ", "").isdigit():
             send_message(
                 chat_id,
                 "❌ Invalid format\n\n"
-                "*Usage:*\n"
-                "`<CustomerID> <Amount>`\n"
-                "or\n"
-                "`<CustomerID> <Amount> <DD-MM-YYYY>`\n\n"
+                "To save data, use:\n"
+                "`<CustomerID> <Amount>`\n\n"
                 "*Examples:*\n"
-                "`132 200`\n"
-                "`132 200 15-01-2026`"
+                "`1 30`\n"
+                "`2 100`\n"
+                "`5 100`"
             )
             return {"status": "ok"}
-
-        try:
-            amount = int(amount)
-            if amount <= 0:
-                send_message(chat_id, "❌ Amount must be greater than 0")
+        
+        # If it has spaces, try to parse as save command
+        if len(parts) == 2 or len(parts) == 3:
+            # Try to parse customer_id and amount
+            try:
+                if len(parts) == 2:
+                    customer_id, amount_str = parts
+                    date = datetime.now().strftime("%d-%m-%Y")
+                else:
+                    customer_id, amount_str, date = parts
+                
+                # Validate customer_id is not empty
+                if not customer_id or not customer_id.strip():
+                    send_message(chat_id, "❌ Customer ID cannot be empty")
+                    return {"status": "ok"}
+                
+                # Validate amount
+                if not amount_str.isdigit():
+                    send_message(chat_id, "❌ Amount must be a number")
+                    return {"status": "ok"}
+                
+                amount = int(amount_str)
+                if amount <= 0:
+                    send_message(chat_id, "❌ Amount must be greater than 0")
+                    return {"status": "ok"}
+                
+                # Validate date format
+                try:
+                    datetime.strptime(date, "%d-%m-%Y")
+                except ValueError:
+                    send_message(chat_id, "❌ Invalid date format. Use DD-MM-YYYY")
+                    return {"status": "ok"}
+                
+                # All validations passed, save to sheet
+                try:
+                    sheet.append_row([
+                        str(customer_id).strip(),
+                        amount,
+                        date,
+                        datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+                    ])
+                    send_message(chat_id, f"✅ *Saved successfully*\n\n"
+                                        f"• Customer: `{customer_id}`\n"
+                                        f"• Amount: ₹{amount:,}\n"
+                                        f"• Date: {date}")
+                    
+                except Exception as e:
+                    send_message(chat_id, f"❌ Error saving to Google Sheets: {str(e)}")
+                
                 return {"status": "ok"}
                 
-            datetime.strptime(date, "%d-%m-%Y")
-        except ValueError:
-            send_message(chat_id, "❌ Invalid amount or date format (use DD-MM-YYYY)")
-            return {"status": "ok"}
-        except Exception:
-            send_message(chat_id, "❌ Invalid input format")
-            return {"status": "ok"}
-
-        try:
-            sheet.append_row([
-                str(customer_id),
-                str(amount),
-                str(date),
-                datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-            ])
-            send_message(chat_id, f"✅ Saved successfully\nCustomer: {customer_id}\nAmount: ₹{amount}\nDate: {date}")
-            
-        except Exception as e:
-            send_message(chat_id, f"❌ Error saving to Google Sheets: {str(e)}")
-            
+            except Exception as e:
+                send_message(chat_id, f"❌ Error processing your request: {str(e)}")
+                return {"status": "ok"}
+        
+        # =================================================
+        # UNKNOWN COMMAND
+        # =================================================
+        send_message(
+            chat_id,
+            "❌ *Unknown command*\n\n"
+            "Type `help` to see available commands.\n\n"
+            "*Common formats:*\n"
+            "• `1 30` - Save ₹30 for customer 1\n"
+            "• `show 1` - Show records for customer 1\n"
+            "• `delete 1 30 15-01-2026` - Delete specific entry"
+        )
         return {"status": "ok"}
 
     except Exception:
@@ -332,14 +379,65 @@ async def health_check():
 # =====================================================
 @app.get("/sheet-status")
 async def sheet_status():
+    """Debug endpoint to check sheet structure"""
     try:
+        # Get all data as list of lists
+        all_data = sheet.get_all_values()
+        
+        # Get records as dictionaries
         records = sheet.get_all_records()
-        return {
+        
+        response = {
             "status": "connected",
+            "total_rows": len(all_data),
+            "headers": all_data[0] if all_data else [],
+            "column_count": len(all_data[0]) if all_data else 0,
             "total_records": len(records),
-            "columns": list(records[0].keys()) if records else [],
-            "sample_data": records[:3] if records else []
         }
+        
+        if records:
+            response["sample_record"] = records[0]
+            response["all_columns"] = list(records[0].keys())
+            
+        return response
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+
+# =====================================================
+# FIX HEADERS (RUN ONCE TO UPDATE SHEET STRUCTURE)
+# =====================================================
+@app.get("/fix-headers")
+async def fix_headers():
+    """Fix the column headers in the sheet to match expected names"""
+    try:
+        # Get current headers
+        headers = sheet.row_values(1)
+        
+        # Create mapping for expected headers
+        expected_headers = ["Customer_id", "Amount", "Date", "Timestamp"]
+        
+        if headers != expected_headers:
+            # Update the headers
+            sheet.update('A1:D1', [expected_headers])
+            return {
+                "status": "updated",
+                "old_headers": headers,
+                "new_headers": expected_headers,
+                "message": "Headers updated successfully"
+            }
+        else:
+            return {
+                "status": "already_correct",
+                "headers": headers,
+                "message": "Headers are already correct"
+            }
+            
     except Exception as e:
         return {
             "status": "error",
