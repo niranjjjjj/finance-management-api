@@ -8,19 +8,25 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+
+# =====================================================
+# APP INIT
+# =====================================================
 app = FastAPI()
 
-# ======================
-# CONFIG
-# ======================
+
+# =====================================================
+# CONFIG (FROM ENV VARIABLES – RENDER SAFE)
+# =====================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 AUTHORIZED_USER_ID = int(os.getenv("AUTHORIZED_USER_ID"))
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-# ======================
+
+# =====================================================
 # GOOGLE SHEETS SETUP
-# ======================
-scope = [
+# =====================================================
+SCOPE = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive"
 ]
@@ -28,51 +34,56 @@ scope = [
 GOOGLE_CREDS = json.loads(os.getenv("GOOGLE_CREDS"))
 
 creds = ServiceAccountCredentials.from_json_keyfile_dict(
-    GOOGLE_CREDS, scope
+    GOOGLE_CREDS,
+    SCOPE
 )
 
 client = gspread.authorize(creds)
 sheet = client.open("Finance_Records").sheet1
 
 
-# ======================
+# =====================================================
 # TELEGRAM WEBHOOK
-# ======================
+# =====================================================
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
     try:
         data = await request.json()
+
         message = data.get("message", {})
         text = message.get("text", "").strip()
         chat_id = message.get("chat", {}).get("id")
         user_id = message.get("from", {}).get("id")
 
-        # Security
+        # -------------------------------
+        # SECURITY CHECK
+        # -------------------------------
         if user_id != AUTHORIZED_USER_ID:
             return {"status": "ignored"}
 
         text_lower = text.lower()
 
-        # ======================
+        # =================================================
         # SHOW COMMAND
-        # ======================
-        if text_lower.startswith("show "):
-            customer_id = text.split(maxsplit=1)[1].strip()
+        # =================================================
+        if text_lower.startswith("show"):
+            customer_id = text_lower.replace("show", "", 1).strip()
 
             records = sheet.get_all_records()
+            customer_rows = []
 
-            rows = [
-                r for r in records
-                if str(r.get("Customer_id")).strip() == customer_id
-            ]
+            for r in records:
+                sheet_id = str(r.get("Customer_id", "")).strip()
+                if sheet_id == str(customer_id):
+                    customer_rows.append(r)
 
-            if not rows:
+            if not customer_rows:
                 send_message(chat_id, f"❌ No records found for {customer_id}")
                 return {"status": "ok"}
 
-            total_given = int(rows[0]["Amount"])
-            payments = rows[1:]
-            total_paid = sum(int(r["Amount"]) for r in payments)
+            total_given = int(customer_rows[0]["Amount"])
+            payments = customer_rows[1:]
+            total_paid = sum(int(p["Amount"]) for p in payments)
             balance = total_given - total_paid
 
             reply = (
@@ -80,23 +91,23 @@ async def telegram_webhook(request: Request):
                 f"💰 Total Given : ₹{total_given}\n"
                 f"💵 Total Paid  : ₹{total_paid}\n"
                 f"📉 Balance     : ₹{balance}\n\n"
-                f"🧾 Payments:\n"
+                f"🧾 Payment History:\n"
             )
 
             if payments:
-                for i, r in enumerate(payments, 1):
-                    reply += f"{i}) {r['Date']} – ₹{r['Amount']}\n"
+                for i, p in enumerate(payments, 1):
+                    reply += f"{i}) {p['Date']} – ₹{p['Amount']}\n"
             else:
                 reply += "No payments yet."
 
             send_message(chat_id, reply)
             return {"status": "ok"}
 
-        # ======================
-        # DELETE COMMAND
-        # ======================
+        # =================================================
+        # DELETE ALL RECORDS OF A CUSTOMER
+        # =================================================
         if text_lower.startswith("delete all "):
-            customer_id = text.split(maxsplit=2)[2].strip()
+            customer_id = text_lower.replace("delete all", "", 1).strip()
 
             rows = sheet.get_all_values()
             header = rows[0]
@@ -115,12 +126,19 @@ async def telegram_webhook(request: Request):
             send_message(chat_id, f"🗑️ Deleted {deleted} records for {customer_id}")
             return {"status": "ok"}
 
+        # =================================================
+        # DELETE SINGLE ENTRY
+        # =================================================
         if text_lower.startswith("delete "):
             parts = text.split()
+
             if len(parts) != 4:
                 send_message(
                     chat_id,
-                    "❌ Use:\ndelete <CustomerID> <Amount> <Date>\nExample:\ndelete 132 200 15-01-2026"
+                    "❌ Use:\n"
+                    "delete <CustomerID> <Amount> <Date>\n"
+                    "Example:\n"
+                    "delete 132 200 15-01-2026"
                 )
                 return {"status": "ok"}
 
@@ -152,9 +170,9 @@ async def telegram_webhook(request: Request):
 
             return {"status": "ok"}
 
-        # ======================
+        # =================================================
         # SAVE DATA
-        # ======================
+        # =================================================
         parts = text.split()
 
         if len(parts) == 3:
@@ -165,7 +183,12 @@ async def telegram_webhook(request: Request):
         else:
             send_message(
                 chat_id,
-                "❌ Invalid format\n\nUse:\nCustomerID Amount\nor\nCustomerID Amount Date\n\nExample:\n132 200"
+                "❌ Invalid format\n\n"
+                "Use:\n"
+                "CustomerID Amount\n"
+                "or\n"
+                "CustomerID Amount Date\n\n"
+                "Example:\n132 200"
             )
             return {"status": "ok"}
 
@@ -187,20 +210,30 @@ async def telegram_webhook(request: Request):
         return {"status": "ok"}
 
     except Exception:
-        with open("server_error.log", "a") as f:
+        with open("server_error.log", "a", encoding="utf-8") as f:
             f.write(traceback.format_exc() + "\n")
         return {"status": "error"}
 
 
-# ======================
-# SEND TELEGRAM MESSAGE
-# ======================
+# =====================================================
+# TELEGRAM SEND MESSAGE
+# =====================================================
 def send_message(chat_id, text):
     try:
         requests.post(
             TELEGRAM_API,
-            json={"chat_id": chat_id, "text": text},
+            json={
+                "chat_id": chat_id,
+                "text": text
+            },
             timeout=5
         )
     except Exception:
         pass
+
+
+
+
+
+
+
