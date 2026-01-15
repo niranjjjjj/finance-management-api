@@ -39,7 +39,7 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(
 )
 
 client = gspread.authorize(creds)
-sheet = client.open("Finance_Records").sheet1
+sheet = client.open("Finance_Records").worksheet("Clean_Data")
 
 
 # =====================================================
@@ -272,9 +272,9 @@ async def telegram_webhook(request: Request):
 
         try:
             sheet.append_row([
-                str(customer_id).strip(),
-                amount,
-                date,
+                str(customer_id),
+                str(amount),
+                str(date),
                 datetime.now().strftime("%d-%m-%Y %H:%M:%S")
             ])
             send_message(chat_id, f"✅ Saved successfully\nCustomer: {customer_id}\nAmount: ₹{amount}\nDate: {date}")
