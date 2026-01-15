@@ -13,8 +13,8 @@ app = FastAPI()
 # ======================
 # CONFIG
 # ======================
-BOT_TOKEN = os.getenv("8360442953:AAHEgHLg--xv1L9h9vwuurQfhS3whX9Q5qE")
-AUTHORIZED_USER_ID = int(os.getenv("1428734963"))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+AUTHORIZED_USER_ID = int(os.getenv("AUTHORIZED_USER_ID"))
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
 # ======================
